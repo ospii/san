@@ -1,0 +1,81 @@
+#!/bin/bash
+
+function usage {
+  echo "Generate CSR with Subject Alternative Name for a key"
+  echo "$0 --san=... --dn=... --key=key.pem"
+  echo ""
+  echo "Options"
+  echo "  --key         Key file for which CSR is generated."
+  echo "  --csr         CSR output file"
+  echo "  --san         Subject Alternative Name, prompted if empty. (eg. IP:127.0.0.1,DNS:example.com)"
+  echo "  --dn          Distinguished Name, prompted if empty. (eg. C=FI,ST=Uusimaa...)"
+  echo ""
+  echo "Example"
+  echo "san --key=mail.example.com.key --csr=mail.example.com.csr --dn=\"C=UA,ST=Lämp,L=BrØther,O=My Organization,CN=mail.example.com\""
+  exit 1
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --san=*) san="${1#*=}"; shift 1;;
+    --dn=*) dn="${1#*=}"; shift 1;;
+    --key=*) key="${1#*=}"; shift 1;;
+    --csr=*) csr="${1#*=}"; shift 1;;
+    -*) echo "*** Unknown option: $1" ; usage ;;
+    *) echo "*** Unknown option: $1"; usage ;;
+  esac
+done
+
+[[ -f "$key" ]] || echo "Key file not found"
+openssl rsa -check -noout -in "$key" || usage
+
+[[ -z "$csr" ]] && csr="${key}.csr"
+if [[ -f "$csr" ]] ; then
+   read -p "Overwriting '${csr}'. Continue? (y/n) " doit
+   [[ ! "$doit" =~ (Y|y) ]] && echo "Aborting." && exit 1
+fi
+
+function prompt_san {
+  echo "Enter Subject alternative names. One each line, enter to continue. Prefixes IP, DNS, email, RID, dirName. (eg. IP:127.0.0.1)"
+  while read -r san_part; do
+    [[ -z "$san_part" ]] && break
+    [[ ! "$san_part" =~ ^(IP|DNS|email|RID|dirName): ]] && echo "Invalid prefix $san_part" && continue
+    san_array+=( "$san_part" )
+  done
+}
+
+function prompt_dn {
+  echo "Enter DN parts. One each line, enter to continue. (eg. O=My Organization)"
+  while read -r dn; do
+    [[ -z "$dn" ]] && break
+    dn_array+=( "$dn" )
+  done
+}
+
+if [[ -z "$san" ]] ; then
+  prompt_san
+  IFS=","
+  san=${san_array[*]}
+fi
+
+if [[ -z "$dn" ]] ; then
+  prompt_dn
+  IFS=$'\n'
+  dn=${dn_array[*]}
+else
+  dn=$(echo ${dn}|tr "," "\n")
+fi
+
+openssl req -out "${csr}" -new -key "${key}" -config <(echo "
+[req]
+distinguished_name=dn
+req_extensions=san
+prompt=no
+utf8=yes
+[dn]
+${dn}
+[san]
+subjectAltName=${san}
+")
+
+echo "Wrote ${key}.csr"
